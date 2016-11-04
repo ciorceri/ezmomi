@@ -1,6 +1,15 @@
 """Command line option definitions"""
 
 
+def add_boolean_argument(parser, name, default=False):
+    """Add a boolean argument to an ArgumentParser instance."""
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--set',  action='store_true', dest=name,
+                       default=default)
+    group.add_argument('--unset', action='store_false', dest=name,
+                       default=default)
+
+
 def arg_setup():
     from .version import __version__
     import argparse
@@ -194,6 +203,15 @@ def arg_setup():
         help="Memory in GB"
     )
     clone_parser.add_argument(
+        "--disks",
+        required=False,
+        default="",
+        type=str,
+        help="Additional disks in GB, e.g. 16,thin 32; "
+             "adds two disks, 16GB (thin provisioned) and 32GB (default)",
+        nargs="+",
+    )
+    clone_parser.add_argument(
         "--domain",
         type=str,
         help="Domain, e.g. example.com"
@@ -207,6 +225,7 @@ def arg_setup():
     clone_parser.add_argument(
         "--post-clone-cmd",
         type=str,
+        default='',
         help="Command to run after clone. This is run from the same shell "
              "that ezmomi is called from. Useful in running extra "
              "provisioning steps."
@@ -294,4 +313,16 @@ def arg_setup():
         help="VM name (case-sensitive)"
     )
 
+    # syncTimeWithHost
+    syncTimeWithHost_parser = subparsers.add_parser(
+        "syncTimeWithHost",
+        parents=[common_parser],
+        help="Virtual Machine syncs time with host"
+    )
+    syncTimeWithHost_parser.add_argument(
+        "--name",
+        required=True,
+        help="VM name (case-sensitive)"
+    )
+    add_boolean_argument(syncTimeWithHost_parser, "value", default=True)
     return main_parser.parse_args()
