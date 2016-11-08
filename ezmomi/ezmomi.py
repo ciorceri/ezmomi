@@ -161,13 +161,12 @@ class EZMomi(object):
         print "Cloning %s to new host %s with %sMB RAM..." % (
             self.config['template'],
             self.config['hostname'],
-            self.config['mem']
+            'same ammount of ' if self.config['mem'] == 0 else self.config['mem']
         )
 
         # initialize a list to hold our network settings
         ip_settings = list()
 
-        # Get network settings for each IP
         for key, ip_string in enumerate(self.config['ips']):
 
             # convert ip from string to the 'IPAddress' type
@@ -326,8 +325,14 @@ class EZMomi(object):
 
         # VM config spec
         vmconf = vim.vm.ConfigSpec()
-        vmconf.numCPUs = self.config['cpus']
-        vmconf.memoryMB = self.config['mem']
+        if self.config['cpus'] == 0:
+            vmconf.numCPUs = template_vm.summary.config.numCpu
+        else:
+            vmconf.numCPUs = self.config['cpus']
+        if self.config['mem'] == 0:
+            vmconf.memoryMB = template_vm.summary.config.memorySizeMB
+        else:
+            vmconf.memoryMB = self.config['mem']
         vmconf.cpuHotAddEnabled = True
         vmconf.memoryHotAddEnabled = True
         vmconf.deviceChange = devices

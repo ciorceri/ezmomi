@@ -195,12 +195,16 @@ def arg_setup():
     clone_parser.add_argument(
         "--cpus",
         type=int,
-        help="Number of CPUs"
+        default=0,
+        help="Number of CPUs."
+             "if not specified, will be used the same value as in template vm"
     )
     clone_parser.add_argument(
         "--mem",
         type=float,
-        help="Memory in GB"
+        default=0,
+        help="Memory in GB."
+             "if not specified, will be used the same value as in template vm"
     )
     clone_parser.add_argument(
         "--disks",
