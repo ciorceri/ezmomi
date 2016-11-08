@@ -167,78 +167,60 @@ class EZMomi(object):
         # initialize a list to hold our network settings
         ip_settings = list()
 
-        for key, ip_string in enumerate(self.config['ips']):
+        # Get network settings for each IP
+        net_data = self.config['ips']
 
-            # convert ip from string to the 'IPAddress' type
-            ip = IPAddress(ip_string)
-
-            # determine network this IP is in
+        matched_network = None
+        for network in self.config['networks']:
+            if (net_data == network) and (self.config['networks'][network]['type'] == 'dhcp'): # we got a match for a network with dhcp
+                matched_network = network
+                break
+        # if no matched network yet, try to match static settings
+        if not matched_network:
+            ip = IPAddress(net_data)
             for network in self.config['networks']:
-                if ip in IPNetwork(network):
-                    self.config['networks'][network]['ip'] = ip
-                    ipnet = IPNetwork(network)
-                    self.config['networks'][network]['subnet_mask'] = str(
-                        ipnet.netmask
-                    )
-                    ip_settings.append(self.config['networks'][network])
+                if self.config['networks'][network]['type'] != 'static':
+                    continue
+                if ip not in IPNetwork(self.config['networks'][network]['network']):
+                    continue
+                self.config['networks'][network]['ip'] = ip
+                ipnet = IPNetwork(self.config['networks'][network]['network'])
+                self.config['networks'][network]['subnet_mask'] = str(
+                    ipnet.netmask
+                )
+                ip_settings.append(self.config['networks'][network])
+                matched_network = network
+                break
 
-            # throw an error if we couldn't find a network for this ip
-            if not any(d['ip'] == ip for d in ip_settings):
-                print "I don't know what network %s is in.  You can supply " \
-                      "settings for this network in config.yml." % ip_string
-                sys.exit(1)
+        if not matched_network:
+            print "I don't know what network %s is in.  You can supply " \
+                  "settings for this network in config.yml." % net_data
+            sys.exit(1)
 
-        # network to place new VM in
-        self.get_obj([vim.Network], ip_settings[0]['network'])
-        datacenter = self.get_obj([vim.Datacenter],
-                                  ip_settings[0]['datacenter']
-                                  )
-
-        # get the folder where VMs are kept for this datacenter
+        network_label = self.config['networks'][matched_network]['network_label']
+        self.get_obj([vim.Network], network_label) # validate VLAN
+        datacenter = self.get_obj([vim.Datacenter], self.config['networks'][matched_network]['datacenter'])
         destfolder = datacenter.vmFolder
+        cluster = self.get_obj([vim.ClusterComputeResource], self.config['networks'][matched_network]['cluster'])
 
-        cluster = self.get_obj([vim.ClusterComputeResource],
-                               ip_settings[0]['cluster']
-                               )
+        relospec = vim.vm.RelocateSpec()
+
+        datastore = self.get_obj([vim.Datastore], self.config['networks'][matched_network]['datastore'])
+        relospec.datastore = datastore
 
         resource_pool_str = self.config['resource_pool']
-        # resource_pool setting in config file takes priority over the
-        # default 'Resources' pool
-        if resource_pool_str == 'Resources' \
-                and ('resource_pool' in ip_settings[key]):
-            resource_pool_str = ip_settings[key]['resource_pool']
-
+        if resource_pool_str == 'Resources' and ('resource_pool' in self.config['networks'][matched_network]):
+            resource_pool_str = self.config['networks'][matched_network]['resource_pool']
         resource_pool = self.get_resource_pool(cluster, resource_pool_str)
+        if resource_pool:
+            relospec.pool = resource_pool
 
         host_system = self.config['host']
         if host_system != "":
-            host_system = self.get_obj([vim.HostSystem],
-                                       self.config['host']
-                                       )
+            host_system = self.get_obj([vim.HostSystem],self.config['host'])
+        if host_system:
+            relospec.host = host_system
 
-        if self.debug:
-            self.print_debug(
-                "Destination cluster",
-                cluster
-            )
-            self.print_debug(
-                "Resource pool",
-                resource_pool
-            )
-
-        if resource_pool is None:
-            # use default resource pool of target cluster
-            resource_pool = cluster.resourcePool
-
-        datastore = None
-        if 'datastore' in ip_settings[0]:
-            datastore = self.get_obj(
-                [vim.Datastore],
-                ip_settings[0]['datastore'])
-            if datastore is None:
-                print "Error: Unable to find Datastore '%s'" \
-                      % ip_settings[0]['datastore']
-                sys.exit(1)
 
         template_vm = self.get_vm_failfast(
             self.config['template'],
@@ -246,21 +228,8 @@ class EZMomi(object):
             'Template VM'
         )
 
-        # Relocation spec
-        relospec = vim.vm.RelocateSpec()
-        relospec.datastore = datastore
-        if host_system:
-            relospec.host = host_system
-
-        if resource_pool:
-            relospec.pool = resource_pool
-
-        # Networking self.config for VM and guest OS
         devices = []
-        adaptermaps = []
-
-        # add existing NIC devices from template to our list of NICs
-        # to be created
+        # delete existing NIC devices from template
         try:
             for device in template_vm.config.hardware.device:
 
@@ -276,43 +245,47 @@ class EZMomi(object):
             # user's issues in #57 at this time.
             pass
 
-        # create a Network device for each static IP
-        for key, ip in enumerate(ip_settings):
-            # VM device
-            nic = vim.vm.device.VirtualDeviceSpec()
-            # or edit if a device exists
-            nic.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
-            nic.device = vim.vm.device.VirtualVmxnet3()
-            nic.device.wakeOnLanEnabled = True
-            nic.device.addressType = 'assigned'
-            # 4000 seems to be the value to use for a vmxnet3 device
-            nic.device.key = 4000
-            nic.device.deviceInfo = vim.Description()
-            nic.device.deviceInfo.label = 'Network Adapter %s' % (key + 1)
-            nic.device.deviceInfo.summary = ip_settings[key]['network']
-            nic.device.backing = (
-                vim.vm.device.VirtualEthernetCard.NetworkBackingInfo()
-            )
-            nic.device.backing.network = (
-                self.get_obj([vim.Network], ip_settings[key]['network'])
-            )
-            nic.device.backing.deviceName = ip_settings[key]['network']
-            nic.device.backing.useAutoDetect = False
-            nic.device.connectable = vim.vm.device.VirtualDevice.ConnectInfo()
-            nic.device.connectable.startConnected = True
-            nic.device.connectable.allowGuestControl = True
-            devices.append(nic)
+        # add a new NIC device
+        nic = vim.vm.device.VirtualDeviceSpec()
+        nic.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
+        nic.device = vim.vm.device.VirtualVmxnet3()
+        nic.device.wakeOnLanEnabled = True
+        nic.device.addressType = 'assigned'
+        nic.device.key = 4000 # 4000 seems to be the value to use for a vmxnet3 device
+        nic.device.deviceInfo = vim.Description()
+        nic.device.deviceInfo.label = 'Network adapter %s' % (1)
+        nic.device.deviceInfo.summary = network_label
+        nic.device.backing = (
+            vim.vm.device.VirtualEthernetCard.NetworkBackingInfo()
+        )
+        nic.device.backing.network = (
+            self.get_obj([vim.Network], network_label)
+        )
+        nic.device.backing.deviceName = network_label
+        nic.device.backing.useAutoDetect = True
+        nic.device.connectable = vim.vm.device.VirtualDevice.ConnectInfo()
+        nic.device.connectable.startConnected = True
+        nic.device.connectable.allowGuestControl = True
+        devices.append(nic)
 
+
+        adaptermaps = []
+        if self.config['networks'][matched_network]['type'] == 'dhcp':
+            guest_map = vim.vm.customization.AdapterMapping()
+            guest_map.adapter = vim.vm.customization.IPSettings(ip=vim.vm.customization.DhcpIpGenerator(),
+                                                                dnsDomain='domain.local')
+            adaptermaps.append(guest_map)
+        else:
             # guest NIC settings, i.e. 'adapter map'
             guest_map = vim.vm.customization.AdapterMapping()
             guest_map.adapter = vim.vm.customization.IPSettings()
             guest_map.adapter.ip = vim.vm.customization.FixedIp()
-            guest_map.adapter.ip.ipAddress = str(ip_settings[key]['ip'])
-            guest_map.adapter.subnetMask = str(ip_settings[key]['subnet_mask'])
+            guest_map.adapter.ip.ipAddress = str(self.config['networks'][matched_network]['ip'])
+            guest_map.adapter.subnetMask = str(self.config['networks'][matched_network]['subnet_mask'])
 
             # these may not be set for certain IPs
             try:
-                guest_map.adapter.gateway = ip_settings[key]['gateway']
+                guest_map.adapter.gateway = self.config['networks'][matched_network]['gateway']
             except:
                 pass
 
@@ -322,6 +295,10 @@ class EZMomi(object):
                 pass
 
             adaptermaps.append(guest_map)
+
+        if len(adaptermaps) == 0:
+            print "I cannot apply network settings to new VM"
+            sys.exit(1)
 
         # VM config spec
         vmconf = vim.vm.ConfigSpec()
@@ -358,7 +335,7 @@ class EZMomi(object):
         clonespec.location = relospec
         clonespec.config = vmconf
         clonespec.customization = customspec
-        clonespec.powerOn = True
+        clonespec.powerOn = not self.config['suppress_power_on']
         clonespec.template = False
 
         self.addDisks(template_vm, clonespec)

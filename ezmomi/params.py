@@ -190,7 +190,6 @@ def arg_setup():
         type=str,
         help="Static IPs of new host, separated by a space. "
              "List primary IP first.",
-        nargs="+",
     )
     clone_parser.add_argument(
         "--cpus",
@@ -225,6 +224,13 @@ def arg_setup():
         type=str,
         default="Resources",
         help="Resource Pool, e.g. 'Linux Servers'"
+    )
+    clone_parser.add_argument(
+        "--suppress-power-on",
+        required=False,
+        action="store_true",
+        default=False,
+        help=("When set, the cloned virtual machine will not be powered on")
     )
     clone_parser.add_argument(
         "--post-clone-cmd",
